@@ -1,0 +1,14 @@
+[project]
+name = "historical-map-geocoder"
+version = "0.1.0"
+description = "Interactive historical map geocoding tool"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "flask>=3.0.0",
+    "pandas>=2.1.4",
+    "python-dotenv>=1.0.0",
+]
+
+[tool.uv]
+package = false  # This is an application, not a library

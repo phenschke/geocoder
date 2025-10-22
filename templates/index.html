@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Historical Map Geocoder</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/leaflet.groupedlayercontrol.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="{{ url_for('static', filename='js/vendor/leaflet.canvas-markers.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/vendor/leaflet.groupedlayercontrol.min.js') }}"></script>
+    <!-- GeoRaster libraries for georeferenced TIFF support -->
+    <script src="https://unpkg.com/georaster"></script>
+    <script src="https://unpkg.com/georaster-layer-for-leaflet"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <!-- Sticky Header -->
+            <div class="sidebar-header">
+                <h1>Historical Geocoder</h1>
+
+                <!-- Current Address -->
+                <div class="section current-address">
+                    <h2>Current Address</h2>
+                    <div id="addressDisplay" class="address-card">
+                        <div class="street-name">-</div>
+                        <div class="house-number">-</div>
+                    </div>
+                </div>
+
+                <!-- Progress -->
+                <div class="section progress-section">
+                    <h2>Progress</h2>
+                    <div id="progressDisplay">
+                        <div class="progress-bar">
+                            <div id="progressFill" class="progress-fill" style="width: 0%"></div>
+                        </div>
+                        <div class="progress-stats">
+                            <span id="progressText">0 / 0 (0%)</span>
+                        </div>
+                        <div class="progress-details">
+                            <div>Geocoded: <span id="geocodedCount">0</span></div>
+                            <div>Skipped: <span id="skippedCount">0</span></div>
+                            <div>Pending: <span id="pendingCount">0</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scrollable Content -->
+            <div class="sidebar-content">
+                <!-- Import Section -->
+                <div class="section import-section">
+                <h2>Import Data</h2>
+
+                <div class="form-group">
+                    <label for="csvFile">Addresses CSV:</label>
+                    <input type="file" id="csvFile" accept=".csv" class="file-input">
+                    <p class="help-text-small">
+                        Upload a single CSV with all addresses. You'll pick the street, number,
+                        and optional geocoding columns after the file is read.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Controls -->
+            <div class="section controls-section">
+                <h2>Controls</h2>
+                <button id="undoBtn" class="btn btn-secondary">Undo (Z)</button>
+                <button id="skipBtn" class="btn btn-warning">Skip (Space)</button>
+                <button id="exportBtn" class="btn btn-success">Export CSV</button>
+
+                <div class="form-group compact-overlay-selector">
+                    <label>Load Overlay:</label>
+                    <div class="overlay-selector-row">
+                        <select id="overlaySelect" class="form-control form-control-sm">
+                            <option value="">Select map...</option>
+                        </select>
+                        <button id="loadOverlayBtn" class="btn-small btn-primary">Load</button>
+                    </div>
+                </div>
+
+                <div class="help-text">
+                    <strong>Instructions:</strong><br>
+                    - Use layer control on map to toggle layers<br>
+                    - Right-click to geocode<br>
+                    - Space to skip, Z to undo<br>
+                    - Drag to pan, scroll to zoom
+                </div>
+            </div>
+
+            <!-- Address List -->
+            <div class="section address-list-section">
+                <div class="section-header" id="addressListToggle">
+                    <h2>Address List</h2>
+                    <span class="toggle-icon">▼</span>
+                </div>
+
+                <div id="addressListContent" class="address-list-content collapsed fixed-height">
+                    <!-- Filters and Controls -->
+                    <div class="list-controls">
+                        <div class="form-group">
+                            <input type="text" id="searchBox" placeholder="Search street or number..." class="form-control">
+                        </div>
+
+                        <div class="filter-row">
+                            <div class="form-group filter-group">
+                                <label>Status:</label>
+                                <select id="statusFilter" class="form-control form-control-sm">
+                                    <option value="">All</option>
+                                    <option value="pending">Pending</option>
+                                    <option value="geocoded">Geocoded</option>
+                                    <option value="skipped">Skipped</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group filter-group">
+                                <label>Street:</label>
+                                <select id="streetFilter" class="form-control form-control-sm">
+                                    <option value="">All Streets</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="filter-row">
+                            <div class="form-group filter-group">
+                                <label>Per Page:</label>
+                                <select id="perPageSelect" class="form-control form-control-sm">
+                                    <option value="20">20</option>
+                                    <option value="50" selected>50</option>
+                                    <option value="100">100</option>
+                                    <option value="0">All</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group filter-group">
+                                <label class="toggle-label">
+                                    <input type="checkbox" id="autoAdvanceToggle" checked>
+                                    Auto-advance
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Address Table -->
+                    <div class="table-container">
+                        <table id="addressTable" class="address-table">
+                            <thead>
+                                <tr>
+                                    <th class="sortable" data-sort="street">
+                                        Street <span class="sort-indicator"></span>
+                                    </th>
+                                    <th class="sortable" data-sort="number">
+                                        No. <span class="sort-indicator"></span>
+                                    </th>
+                                    <th class="sortable" data-sort="status">
+                                        Status <span class="sort-indicator"></span>
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody id="addressTableBody">
+                                <tr>
+                                    <td colspan="3" class="loading">Loading addresses...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Pagination -->
+                    <div class="pagination-container">
+                        <div class="pagination-info">
+                            <span id="paginationInfo">-</span>
+                        </div>
+                        <div class="pagination-controls">
+                            <button id="firstPageBtn" class="pagination-btn">«</button>
+                            <button id="prevPageBtn" class="pagination-btn">‹</button>
+                            <span id="pageNumbers" class="page-numbers"></span>
+                            <button id="nextPageBtn" class="pagination-btn">›</button>
+                            <button id="lastPageBtn" class="pagination-btn">»</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            </div> <!-- End sidebar-content -->
+        </div> <!-- End sidebar -->
+
+        <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-label="Resize sidebar" aria-orientation="vertical"></div>
+
+        <!-- Map Viewer -->
+        <div class="map-container">
+            <div id="map" class="leaflet-map"></div>
+            <div class="map-info">
+                <span id="coordsDisplay">Click map to see coordinates</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- CSV Import Modal -->
+    <div id="csvModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Import CSV - Select Columns</h2>
+                <button class="modal-close" id="modalClose">&times;</button>
+            </div>
+
+            <div class="modal-body">
+                <p class="modal-intro">Preview of your CSV file. Select which columns contain the street names and house numbers.</p>
+
+                <div class="column-selectors">
+                    <div class="form-group">
+                        <label for="modalStreetCol">Street Column:</label>
+                        <select id="modalStreetCol" class="form-control"></select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="modalNumberCol">Number Column:</label>
+                        <select id="modalNumberCol" class="form-control"></select>
+                    </div>
+
+                    <div class="form-group full-width">
+                        <label class="toggle-label">
+                            <input type="checkbox" id="modalUseGeocoding">
+                            Import existing geocoding (latitude/longitude)
+                        </label>
+                    </div>
+
+                    <div id="modalGeocodingFields" class="form-group geocoding-select-group full-width" style="display: none;">
+                        <div class="form-group">
+                            <label for="modalLatCol">Latitude Column:</label>
+                            <select id="modalLatCol" class="form-control">
+                                <option value="">-- Select latitude column --</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="modalLonCol">Longitude Column:</label>
+                            <select id="modalLonCol" class="form-control">
+                                <option value="">-- Select longitude column --</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="preview-section">
+                    <h3>Data Preview (first 5 rows):</h3>
+                    <div class="table-preview-container">
+                        <table id="previewTable" class="preview-table"></table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button id="modalCancel" class="btn btn-secondary">Cancel</button>
+                <button id="modalImport" class="btn btn-primary">Import Addresses</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
