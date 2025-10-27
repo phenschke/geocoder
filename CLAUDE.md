@@ -114,6 +114,66 @@ The application supports two import methods:
 - Skips duplicate (street, number) combinations
 - Supports importing pre-geocoded data with lat/lon columns
 
+### Pre-Generation Workflow (Street-by-Street Geocoding)
+
+For street-by-street geocoding workflows, the application supports pre-generating addresses from a list of streets with maximum house numbers.
+
+**Generating Addresses**:
+
+Use the `generate_addresses.py` script to expand a street list into a full address list:
+
+```bash
+# Input: streets.csv with columns: street, max_number
+# Output: addresses.csv ready for import
+
+python generate_addresses.py streets_with_max.csv addresses.csv
+```
+
+**Example input** (`streets_with_max.csv`):
+```csv
+street,max_number
+Leopoldstraße,50
+Ludwigstraße,75
+Maximilianstraße,100
+```
+
+**Example output** (`addresses.csv`):
+```csv
+street,number
+Leopoldstraße,1
+Leopoldstraße,2
+...
+Leopoldstraße,50
+Ludwigstraße,1
+...
+```
+
+**Street-by-Street Geocoding Workflow**:
+
+1. **Generate and import addresses**: Run `generate_addresses.py` and import the output CSV
+2. **Search for street**: Type a street name in the search box (e.g., "Leopold")
+3. **Press Enter**: This automatically:
+   - Filters to that street
+   - Filters to pending status only
+   - Jumps to the first pending address (house number 1 typically)
+4. **Start geocoding**: Right-click buildings sequentially to geocode addresses 1, 2, 3...
+5. **Auto-advance**: With auto-advance ON, each geocode automatically moves to the next pending address
+6. **Skip missing buildings**: Press Space to skip addresses for demolished/non-existent buildings
+7. **Switch streets**: Type a new street name and press Enter to switch to a different street
+
+**Benefits**:
+- No need to track which house number you're on (the app handles it)
+- Can switch between streets freely and resume where you left off
+- Unused high numbers remain as "pending" (can filter them out in post-processing if needed)
+- Leverages existing address list UI (filtering, sorting, pagination)
+
+**Cleanup After Geocoding**:
+
+After completing a street, you may have high-numbered pending addresses that don't exist. Options:
+1. Leave them as pending (they won't affect geocoded results)
+2. Filter them out during export/analysis (status != 'pending')
+3. Manually mark remaining addresses as "skipped" using the address list
+
 ### Address List Feature
 
 The address list is a sophisticated UI component with:
@@ -204,6 +264,7 @@ geocoder/
 ├── app.py                    # Flask application and API endpoints
 ├── database.py               # SQLite database layer
 ├── config.py                 # Configuration constants
+├── generate_addresses.py     # Script to pre-generate addresses from street list
 ├── pyproject.toml            # uv dependencies
 ├── run.sh                    # Startup script
 ├── data/

@@ -62,6 +62,7 @@ class GeocoderApp {
         this.sidebarMinWidth = 260;
         this.sidebarMaxWidth = 640;
         this.sidebarWidthStorageKey = 'geocoder.sidebarWidth';
+        this.isProcessingAction = false; // Prevent concurrent geocode/skip operations
 
         this.init();
     }
@@ -346,7 +347,6 @@ class GeocoderApp {
         document.getElementById('modalUseGeocoding').addEventListener('change', () => this.onGeocodingToggle());
 
         // Control buttons
-        document.getElementById('undoBtn').addEventListener('click', () => this.undo());
         document.getElementById('skipBtn').addEventListener('click', () => this.skip());
         document.getElementById('exportBtn').addEventListener('click', () => this.export());
 
@@ -373,12 +373,27 @@ class GeocoderApp {
             if (e.key === 'Enter') {
                 e.preventDefault();
                 clearTimeout(this.searchTimeout);
-                this.addressList.searchQuery = e.target.value;
+                const query = e.target.value.trim();
+
+                if (!query) {
+                    return;
+                }
+
+                // Set filters for street-based geocoding workflow
+                this.addressList.searchQuery = query;
+                this.addressList.filterStatus = ''; // Show all addresses for the street
                 this.addressList.currentPage = 1;
+
+                // Update UI to reflect filters
+                document.getElementById('statusFilter').value = '';
+
+                // Load filtered list
                 const result = await this.loadAddressList();
                 const addresses = result && Array.isArray(result.addresses)
                     ? result.addresses
                     : this.currentPageAddresses;
+
+                // Jump to first result and focus map
                 await this.jumpToFirstSearchResult(addresses);
             }
         });
@@ -1676,6 +1691,11 @@ class GeocoderApp {
             return;
         }
 
+        // Prevent overlapping geocode operations
+        if (this.isProcessingAction) {
+            return;
+        }
+
         const lat = e.latlng.lat;
         const lon = e.latlng.lng;
 
@@ -1731,6 +1751,13 @@ class GeocoderApp {
             return;
         }
 
+        // Prevent concurrent geocode operations
+        if (this.isProcessingAction) {
+            return;
+        }
+
+        this.isProcessingAction = true;
+
         try {
             await this.apiCall('/api/geocode', 'POST', {
                 address_id: this.currentAddress.id,
@@ -1747,16 +1774,45 @@ class GeocoderApp {
             this.updateProgress();
             this.scheduleLoadGeocodedPoints(0);
 
+            // Capture next address BEFORE reloading (in case current gets filtered out)
+            const currentIndex = this.currentPageAddresses.findIndex(
+                addr => addr.id === this.currentAddress.id
+            );
+            const nextAddressId = (currentIndex >= 0 && currentIndex < this.currentPageAddresses.length - 1)
+                ? this.currentPageAddresses[currentIndex + 1].id
+                : null;
+            const wasInList = currentIndex >= 0;
+
             // Reload address list to update status
             await this.loadAddressList();
 
-            // Advance to next address based on list order (may load list again if going to next page)
-            await this.advanceToNextAddress();
+            // Advance to next address
+            if (this.autoAdvanceEnabled) {
+                if (nextAddressId) {
+                    // Select the captured next address
+                    await this.selectAddress(nextAddressId, {
+                        reloadList: false,
+                        focus: false
+                    });
+                } else if (!wasInList && this.currentPageAddresses.length > 0) {
+                    // Current address wasn't in filtered list (e.g., clicked a geocoded marker)
+                    // Advance to first address in filtered list to resume workflow
+                    await this.selectAddress(this.currentPageAddresses[0].id, {
+                        reloadList: false,
+                        focus: false
+                    });
+                } else {
+                    // At end of page, use normal advance logic
+                    await this.advanceToNextAddress();
+                }
+            }
 
             // Update display
             this.updateAddressDisplay();
         } catch (error) {
             // Error already handled
+        } finally {
+            this.isProcessingAction = false;
         }
     }
 
@@ -1849,6 +1905,13 @@ class GeocoderApp {
             return;
         }
 
+        // Prevent concurrent skip operations
+        if (this.isProcessingAction) {
+            return;
+        }
+
+        this.isProcessingAction = true;
+
         try {
             await this.apiCall('/api/skip', 'POST', {
                 address_id: this.currentAddress.id
@@ -1857,16 +1920,45 @@ class GeocoderApp {
             // Update progress
             this.updateProgress();
 
+            // Capture next address BEFORE reloading (in case current gets filtered out)
+            const currentIndex = this.currentPageAddresses.findIndex(
+                addr => addr.id === this.currentAddress.id
+            );
+            const nextAddressId = (currentIndex >= 0 && currentIndex < this.currentPageAddresses.length - 1)
+                ? this.currentPageAddresses[currentIndex + 1].id
+                : null;
+            const wasInList = currentIndex >= 0;
+
             // Reload address list to update status
             await this.loadAddressList();
 
-            // Advance to next address based on list order
-            await this.advanceToNextAddress();
+            // Advance to next address
+            if (this.autoAdvanceEnabled) {
+                if (nextAddressId) {
+                    // Select the captured next address
+                    await this.selectAddress(nextAddressId, {
+                        reloadList: false,
+                        focus: false
+                    });
+                } else if (!wasInList && this.currentPageAddresses.length > 0) {
+                    // Current address wasn't in filtered list (e.g., clicked a geocoded marker)
+                    // Advance to first address in filtered list to resume workflow
+                    await this.selectAddress(this.currentPageAddresses[0].id, {
+                        reloadList: false,
+                        focus: false
+                    });
+                } else {
+                    // At end of page, use normal advance logic
+                    await this.advanceToNextAddress();
+                }
+            }
 
             // Update display
             this.updateAddressDisplay();
         } catch (error) {
             // Error already handled
+        } finally {
+            this.isProcessingAction = false;
         }
     }
 
@@ -1893,15 +1985,30 @@ class GeocoderApp {
     }
 
     onKeyDown(e) {
-        switch(e.key.toLowerCase()) {
+        // Don't trigger shortcuts if user is typing in an input field
+        const activeElement = document.activeElement;
+        const isTyping = activeElement && (
+            activeElement.tagName === 'INPUT' ||
+            activeElement.tagName === 'TEXTAREA' ||
+            activeElement.tagName === 'SELECT' ||
+            activeElement.isContentEditable
+        );
+
+        if (isTyping) {
+            return; // Let the user type normally
+        }
+
+        switch(e.key) {
             case ' ':
                 e.preventDefault();
                 this.skip();
                 break;
-            case 'z':
-                if (!e.ctrlKey && !e.metaKey) {
-                    e.preventDefault();
-                    this.undo();
+            case 'Tab':
+                e.preventDefault();
+                const searchBox = document.getElementById('searchBox');
+                if (searchBox) {
+                    searchBox.focus();
+                    searchBox.select(); // Select any existing text for easy replacement
                 }
                 break;
         }
