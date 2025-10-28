@@ -350,9 +350,6 @@ class GeocoderApp {
         document.getElementById('skipBtn').addEventListener('click', () => this.skip());
         document.getElementById('exportBtn').addEventListener('click', () => this.export());
 
-        // Overlay selector
-        document.getElementById('loadOverlayBtn').addEventListener('click', () => this.loadSelectedOverlay());
-
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => this.onKeyDown(e));
 
@@ -793,18 +790,6 @@ class GeocoderApp {
     async loadAvailableMaps() {
         try {
             const result = await this.apiCall('/api/maps');
-            const select = document.getElementById('overlaySelect');
-
-            // Clear existing options except first
-            select.innerHTML = '<option value="">Select map...</option>';
-
-            // Add each map as an option
-            result.maps.forEach(mapName => {
-                const option = document.createElement('option');
-                option.value = mapName;
-                option.textContent = mapName;
-                select.appendChild(option);
-            });
 
             // Auto-load tiled maps on startup
             await this.autoLoadTiledMaps(result.maps);
@@ -838,134 +823,6 @@ class GeocoderApp {
         }
     }
 
-    async loadSelectedOverlay() {
-        const select = document.getElementById('overlaySelect');
-        const mapName = select.value;
-
-        if (!mapName) {
-            alert('Please select a map overlay');
-            return;
-        }
-
-        // Check if overlay already exists
-        if (this.overlayLayers[mapName]) {
-            // Already loaded, just add it to the map and show in layer control
-            if (!this.map.hasLayer(this.overlayLayers[mapName])) {
-                this.overlayLayers[mapName].addTo(this.map);
-            }
-            return;
-        }
-
-        // Create new overlay
-        const imagePath = `/static/maps/${mapName}`;
-
-        // Check if this is a GeoTIFF file
-        const isGeoTiff = mapName.toLowerCase().endsWith('.tif') || mapName.toLowerCase().endsWith('.tiff');
-
-        if (isGeoTiff) {
-            // Check if tiles exist (for better performance)
-            // Extract the directory path (e.g., "250122_1908_1909_Georef/file.tif" -> "250122_1908_1909_Georef")
-            const parts = mapName.split('/');
-            const tilesPath = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
-
-            console.log('Checking for tiles at:', tilesPath);
-            const hasTiles = await this.checkForTiles(tilesPath);
-
-            if (hasTiles) {
-                console.log('Tiles found! Loading tile layer...');
-                // Load as tile layer (fast!)
-                await this.loadTileLayer(tilesPath, mapName);
-            } else {
-                console.log('No tiles found, falling back to GeoRaster (slow)...');
-                // Fall back to GeoRaster (slower but works without pre-processing)
-                await this.loadGeoTiff(imagePath, mapName);
-            }
-        } else {
-            // Load as regular image overlay with default bounds
-            // Calculate default bounds centered on Munich
-            const latOffset = 0.02; // roughly 2km
-            const lngOffset = 0.03; // roughly 2km
-
-            const bounds = [
-                [this.munichCenter[0] - latOffset, this.munichCenter[1] - lngOffset],
-                [this.munichCenter[0] + latOffset, this.munichCenter[1] + lngOffset]
-            ];
-
-            // Create image overlay and add to map
-            const overlay = L.imageOverlay(imagePath, bounds, {
-                opacity: 1,
-                interactive: false
-            });
-
-            // Store overlay
-            this.overlayLayers[mapName] = overlay;
-
-            // Add to layer control
-            this.layerControl.addOverlay(overlay, mapName, 'Historical Maps');
-
-            // Add to map
-            overlay.addTo(this.map);
-
-            // Zoom to overlay bounds
-            this.map.fitBounds(bounds);
-
-            this.syncMarkerDragState();
-        }
-    }
-
-    async loadGeoTiff(imagePath, mapName) {
-        try {
-            // Show loading message
-            const select = document.getElementById('overlaySelect');
-            const originalText = select.options[select.selectedIndex].text;
-            select.options[select.selectedIndex].text = `Loading ${mapName}...`;
-
-            // Fetch and parse GeoTIFF
-            const response = await fetch(imagePath);
-            const arrayBuffer = await response.arrayBuffer();
-            const georaster = await parseGeoraster(arrayBuffer);
-
-            // Create GeoRaster layer
-            const overlay = new GeoRasterLayer({
-                georaster: georaster,
-                opacity: 1,
-                resolution: 512, // Maximum recommended for reading small details like house numbers
-                resampleMethod: 'nearest' // Faster rendering while maintaining sharpness
-            });
-
-            // Store overlay
-            this.overlayLayers[mapName] = overlay;
-
-            // Add to layer control
-            this.layerControl.addOverlay(overlay, mapName, 'Historical Maps');
-
-            // Add to map
-            overlay.addTo(this.map);
-
-            // Zoom to GeoTIFF bounds
-            this.map.fitBounds(overlay.getBounds());
-
-            // Restore dropdown text
-            select.options[select.selectedIndex].text = originalText;
-
-            console.log('GeoTIFF loaded successfully:', {
-                width: georaster.width,
-                height: georaster.height,
-                projection: georaster.projection,
-                bounds: overlay.getBounds()
-            });
-
-            this.syncMarkerDragState();
-        } catch (error) {
-            console.error('Error loading GeoTIFF:', error);
-            alert(`Failed to load georeferenced TIFF: ${error.message}\n\nMake sure the file has embedded georeferencing information.`);
-
-            // Restore dropdown
-            const select = document.getElementById('overlaySelect');
-            select.selectedIndex = 0;
-        }
-    }
-
     async checkForTiles(tilesPath) {
         // Check if tiles/tilemapresource.xml exists (created by gdal2tiles.py)
         try {
@@ -978,10 +835,7 @@ class GeocoderApp {
 
     async loadTileLayer(tilesPath, mapName) {
         try {
-            // Show loading message
-            const select = document.getElementById('overlaySelect');
-            const originalText = select.options[select.selectedIndex].text;
-            select.options[select.selectedIndex].text = `Loading ${mapName}...`;
+            console.log(`Auto-loading tile layer: ${mapName}`);
 
             // Fetch tilemapresource.xml to get bounds and zoom levels
             const response = await fetch(`/static/maps/${tilesPath}/tiles/tilemapresource.xml`);
@@ -1029,9 +883,6 @@ class GeocoderApp {
             // Zoom to overlay bounds
             this.map.fitBounds(bounds);
 
-            // Restore dropdown text
-            select.options[select.selectedIndex].text = originalText;
-
             console.log('Tile layer loaded successfully:', {
                 bounds: bounds,
                 tilesPath: tilesPath
@@ -1041,10 +892,6 @@ class GeocoderApp {
         } catch (error) {
             console.error('Error loading tile layer:', error);
             alert(`Failed to load tile layer: ${error.message}`);
-
-            // Restore dropdown
-            const select = document.getElementById('overlaySelect');
-            select.selectedIndex = 0;
         }
     }
 
