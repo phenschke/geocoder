@@ -1,5 +1,7 @@
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
 import os
+import sqlite3
+from pathlib import Path
 from config import Config
 from database import Database
 
@@ -253,24 +255,19 @@ def export():
 
 @app.route('/api/maps', methods=['GET'])
 def list_maps():
-    """List available map files"""
+    """List available MBTiles files"""
     try:
         maps_dir = Config.MAPS_DIR
         if not os.path.exists(maps_dir):
             return jsonify({'maps': []})
 
         map_files = []
-        # Walk through directory and subdirectories
-        for root, dirs, files in os.walk(maps_dir):
-            # Skip tiles directories (they contain individual tile PNGs, not source maps)
-            dirs[:] = [d for d in dirs if d != 'tiles']
-
-            for f in files:
-                if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.tif')):
-                    # Get relative path from maps_dir
-                    full_path = os.path.join(root, f)
-                    rel_path = os.path.relpath(full_path, maps_dir)
-                    map_files.append(rel_path)
+        # List all .mbtiles files
+        for f in os.listdir(maps_dir):
+            if f.lower().endswith('.mbtiles'):
+                # Remove .mbtiles extension to get map name
+                map_name = f[:-8]  # Remove '.mbtiles'
+                map_files.append(map_name)
 
         return jsonify({
             'success': True,
@@ -440,6 +437,44 @@ def get_map_config(map_filename):
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/tiles/<path:map_name>/<int:z>/<int:x>/<int:y>.png')
+def serve_tile(map_name, z, x, y):
+    """Serve map tiles from MBTiles"""
+    try:
+        # Serve from MBTiles (now in static/maps/)
+        mbtiles_path = Path(Config.MAPS_DIR) / f'{map_name}.mbtiles'
+
+        if not mbtiles_path.exists():
+            return '', 404
+
+        conn = sqlite3.connect(str(mbtiles_path))
+        cursor = conn.cursor()
+
+        # MBTiles uses TMS tiling scheme, query directly with y coordinate
+        cursor.execute(
+            'SELECT tile_data FROM tiles WHERE zoom_level = ? AND tile_column = ? AND tile_row = ?',
+            (z, x, y)
+        )
+
+        result = cursor.fetchone()
+        conn.close()
+
+        if result:
+            from io import BytesIO
+            return send_file(
+                BytesIO(result[0]),
+                mimetype='image/png',
+                max_age=31536000  # Cache for 1 year
+            )
+
+        # Tile not found
+        return '', 404
+
+    except Exception as e:
+        print(f"Error serving tile {map_name}/{z}/{x}/{y}: {e}")
+        return '', 500
 
 
 if __name__ == '__main__':

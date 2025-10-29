@@ -831,67 +831,22 @@ class GeocoderApp {
     }
 
     async autoLoadTiledMaps(maps) {
-        // Find all unique map directories that have tiles
-        const uniqueTilePaths = new Set();
-
+        // Load all MBTiles maps
         for (const mapName of maps) {
-            // Extract directory path (e.g., "folder/file.tif" -> "folder")
-            const parts = mapName.split('/');
-            if (parts.length < 2) continue; // Skip files in root maps directory
-
-            const tilesPath = parts.slice(0, -1).join('/');
-
-            // Skip if we've already checked this directory
-            if (uniqueTilePaths.has(tilesPath)) continue;
-
-            // Check if tiles exist for this map
-            const hasTiles = await this.checkForTiles(tilesPath);
-
-            if (hasTiles) {
-                console.log(`Auto-loading tiled map: ${tilesPath}`);
-                uniqueTilePaths.add(tilesPath);
-                await this.loadTileLayer(tilesPath, mapName);
-            }
+            console.log(`Auto-loading MBTiles map: ${mapName}`);
+            await this.loadTileLayer(mapName);
         }
     }
 
-    async checkForTiles(tilesPath) {
-        // Check if tiles/tilemapresource.xml exists (created by gdal2tiles.py)
+    async loadTileLayer(mapName) {
         try {
-            const response = await fetch(`/static/maps/${tilesPath}/tiles/tilemapresource.xml`);
-            return response.ok;
-        } catch {
-            return false;
-        }
-    }
-
-    async loadTileLayer(tilesPath, mapName) {
-        try {
-            console.log(`Auto-loading tile layer: ${mapName}`);
-
-            // Fetch tilemapresource.xml to get bounds and zoom levels
-            const response = await fetch(`/static/maps/${tilesPath}/tiles/tilemapresource.xml`);
-            const xmlText = await response.text();
-            const parser = new DOMParser();
-            const xmlDoc = parser.parseFromString(xmlText, "text/xml");
-
-            // Extract bounding box (already in lat/lon format from gdal2tiles.py)
-            const bbox = xmlDoc.querySelector('BoundingBox');
-            const minLon = parseFloat(bbox.getAttribute('minx'));
-            const minLat = parseFloat(bbox.getAttribute('miny'));
-            const maxLon = parseFloat(bbox.getAttribute('maxx'));
-            const maxLat = parseFloat(bbox.getAttribute('maxy'));
-
-            // Create bounds directly from lat/lon (no conversion needed)
-            const bounds = L.latLngBounds([minLat, minLon], [maxLat, maxLon]);
-
-            console.log('Tile bounds:', bounds);
+            console.log(`Loading tile layer: ${mapName}`);
 
             // Create tile layer with performance optimizations
-            const overlay = L.tileLayer(`/static/maps/${tilesPath}/tiles/{z}/{x}/{y}.png`, {
-                tms: true, // TMS tile numbering (Y axis inverted)
+            // All maps are served from MBTiles
+            const tileOptions = {
+                tms: true, // TMS tiling scheme (Y axis inverted)
                 opacity: 1,
-                bounds: bounds,
                 minZoom: 13,
                 maxZoom: 20,
                 maxNativeZoom: 20, // Maximum zoom level with actual tiles
@@ -901,12 +856,14 @@ class GeocoderApp {
                 updateWhenZooming: false, // Don't update during zoom for better performance
                 tileSize: 256, // Standard tile size
                 crossOrigin: true // Enable CORS if needed
-            });
+            };
+
+            const overlay = L.tileLayer(`/tiles/${mapName}/{z}/{x}/{y}.png`, tileOptions);
 
             // Store overlay
             this.overlayLayers[mapName] = overlay;
 
-            // Add to layer control
+            // Add to layer control with clean display name
             this.layerControl.addOverlay(overlay, mapName, 'Historical Maps');
 
             // Remove "No overlay" dummy layer since we're loading a real map
@@ -917,13 +874,7 @@ class GeocoderApp {
             // Add to map
             overlay.addTo(this.map);
 
-            // Zoom to overlay bounds
-            this.map.fitBounds(bounds);
-
-            console.log('Tile layer loaded successfully:', {
-                bounds: bounds,
-                tilesPath: tilesPath
-            });
+            console.log('Tile layer loaded successfully:', mapName);
 
             this.syncMarkerDragState();
         } catch (error) {

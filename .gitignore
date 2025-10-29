@@ -25,10 +25,12 @@ instance/
 # Data files
 data/
 !data/.gitkeep
+!data/geocoder.db
 
 # Map files (too large for git)
 static/maps/*
 !static/maps/.gitkeep
+static/maps_deprecated
 
 # IDE
 .vscode/
