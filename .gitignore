@@ -51,3 +51,8 @@ Thumbs.db
 # Exports
 export.csv
 geocoded_*.csv
+
+
+.claude/
+scripts/explore_munich_addresses.R
+scripts/prepare_munich_geocoding.R

@@ -1,17 +1,6 @@
 # Historical Map Geocoder
 
-A fast, interactive tool for geocoding historical addresses by clicking on rasterized maps. Built with Flask and vanilla JavaScript.
-
-## Features
-
-- **Interactive Map Viewer**: Pan, zoom, and navigate historical maps with ease
-- **Right-click Geocoding**: Simple right-click to mark address locations
-- **Undo/Redo**: Easily correct mistakes with full undo support (last 50 actions)
-- **Skip Uncertain Addresses**: Mark addresses for later review
-- **Progress Tracking**: Real-time progress bar and statistics
-- **CSV Import/Export**: Import address lists and export geocoded results
-- **Keyboard Shortcuts**: Speed up workflow with keyboard controls
-- **Auto-advance**: Automatically moves to next address after geocoding
+A tool for geocoding historical addresses by clicking on a map. Flask + Vanilla JS.
 
 ## Quick Start
 
@@ -19,17 +8,48 @@ A fast, interactive tool for geocoding historical addresses by clicking on raste
 
 This project uses [uv](https://github.com/astral-sh/uv) for fast dependency management.
 
-```bash
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+#### Linux/Mac
 
-# Install dependencies (uv handles everything automatically)
-uv sync
+```bash
+# Run the startup script (installs uv and dependencies automatically)
+./run.sh
 ```
 
-Or use the startup script which does everything for you:
+The script will:
+- Install uv if not already installed
+- Install all dependencies
+- Create necessary directories
+- Start the server at http://localhost:5000
+
+#### Windows
+
+```cmd
+# Run the startup script (installs uv and dependencies automatically)
+run.bat
+```
+
+The script will:
+- Install uv if not already installed
+- Install all dependencies
+- Create necessary directories
+- Start the server at http://localhost:5000
+
+#### Manual Installation (Optional)
+
+If you prefer to install manually:
+
+**Linux/Mac:**
 ```bash
-./run.sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv sync
+uv run python app.py
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://astral.sh/uv/install.ps1 | iex
+uv sync
+uv run python app.py
 ```
 
 ### 2. Prepare Your Data
@@ -65,8 +85,6 @@ gdal2tiles.py -z 13-20 \
 - **With tiles**: Map loads instantly, smooth panning at all zoom levels
 - **Without tiles**: 30-60 second load time, laggy panning, high memory usage
 
-**Note**: Small PNG/JPG maps (<50MB) don't need tiling. GeoTIFF files should always be tiled for best performance.
-
 #### Address Data
 
 Create a CSV file with your addresses. The CSV should have at least two columns:
@@ -84,15 +102,17 @@ Oak Avenue,17
 
 ### 3. Run the Application
 
+**Linux/Mac:**
 ```bash
-# Using the startup script (recommended)
 ./run.sh
-
-# Or manually with uv
-uv run python app.py
 ```
 
-Open your browser to: `http://localhost:5000`
+**Windows:**
+```cmd
+run.bat
+```
+
+The server will start automatically. Open your browser to: `http://localhost:5000`
 
 ### 4. Geocoding Workflow
 
@@ -148,6 +168,8 @@ All data is stored in SQLite database at `data/geocoder.db`:
 - **addresses**: Main table with street, number, coordinates, status
 - **undo_history**: Stack of last 50 actions for undo functionality
 
+The tool auto-saves after each click, so you can work in sessions and resume anytime.
+
 ## CSV Format
 
 ### Input CSV
@@ -165,57 +187,3 @@ Exported file includes:
 - `lon`: Longitude (null unless georeferenced)
 - `status`: geocoded, skipped, or pending
 - `timestamp`: When the address was processed
-
-## Performance Tips
-
-1. **Organize your addresses**: Pre-sort your CSV by geographic location to minimize map panning
-2. **Use keyboard shortcuts**: Space and Z keys are much faster than clicking buttons
-3. **Adjust zoom once**: Find a comfortable zoom level and stick to it
-4. **Enable auto-save**: Progress is automatically saved after each action
-
-## Estimated Performance
-
-Based on your estimate:
-- **15 seconds per address** (including time to pan/click)
-- **5,000 addresses** = ~21 hours of work
-- With practice, you can likely get faster (10-12 seconds per address)
-
-The tool auto-saves after each click, so you can work in sessions and resume anytime.
-
-## Troubleshooting
-
-**Map won't load or loads very slowly**:
-- Ensure image is in `static/maps/` directory
-- Check that file format is .png, .jpg, .jpeg, .tiff, or .tif
-- Verify file isn't corrupted
-- **For GeoTIFF files**: Pre-generate tiles using `gdal2tiles.py` (see Map Preparation section)
-- If using tiles, check that `tiles/tilemapresource.xml` exists in the map directory
-
-**Map selector shows no maps**:
-- Check that files are directly in `static/maps/` or in subdirectories
-- Files in `tiles/` subdirectories are automatically excluded from the dropdown
-
-**CSV import fails**:
-- Check that CSV path is absolute (e.g., `/home/user/data/addresses.csv`)
-- Verify CSV has at least 2 columns
-- Try specifying column names manually
-
-**Points don't appear after geocoding**:
-- Points appear as colored dots on the map (different colors per street)
-- Recent points (last 5) have a larger size and shadow
-- Refresh the page if points don't show
-- Check browser console (F12) for errors
-
-## Future Enhancements
-
-Potential additions:
-- Georeferencing support (convert pixel coordinates to lat/lon)
-- Multiple map tiles/layers
-- Address search/jump to
-- Batch import from database
-- Real-time collaboration (multiple users)
-- Heat map visualization of geocoded density
-
-## License
-
-MIT License - feel free to modify and use for your research!
