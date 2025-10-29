@@ -12,6 +12,7 @@ class GeocoderApp {
         this.selectedMarkerId = null; // Track which marker is selected for dragging
         this.currentAddress = null;
         this.geocodedPoints = [];
+        this.streetColorMap = null; // Cache for spatially-aware street color assignments
         this.layerControl = null;
         this.opacityControl = null;
         this.opacityControlAdded = false; // Track if opacity control is on map
@@ -114,9 +115,15 @@ class GeocoderApp {
         this.canvasMarkerLayer = L.canvasIconLayer({ padding: 0.3 });
         this.canvasMarkerLayer.addTo(this.map);
 
+        // Create "No overlay" dummy layer for deselecting all historical maps
+        this.noOverlayLayer = L.layerGroup();
+        this.noOverlayLayer.addTo(this.map);
+
         // Initialize grouped layer control (will be populated with overlays later)
         const groupedOverlays = {
-            'Historical Maps': {},
+            'Historical Maps': {
+                'No overlay': this.noOverlayLayer
+            },
             'Data Layers': {
                 'Geocoded markers': this.canvasMarkerLayer
             }
@@ -281,8 +288,25 @@ class GeocoderApp {
     }
 
     onOverlayAdd(e) {
-        // Show opacity control when any overlay is added
-        if (!this.opacityControlAdded) {
+        // If "No overlay" was selected, remove all historical overlays
+        if (e.layer === this.noOverlayLayer) {
+            for (let name in this.overlayLayers) {
+                if (this.map.hasLayer(this.overlayLayers[name])) {
+                    this.map.removeLayer(this.overlayLayers[name]);
+                }
+            }
+            return;
+        }
+
+        // If a real historical map was selected, remove "No overlay" dummy layer
+        if (this.overlayLayers[e.name]) {
+            if (this.map.hasLayer(this.noOverlayLayer)) {
+                this.map.removeLayer(this.noOverlayLayer);
+            }
+        }
+
+        // Show opacity control when any real overlay is added
+        if (e.layer !== this.noOverlayLayer && !this.opacityControlAdded) {
             this.opacityControl.addTo(this.map);
             this.opacityControlAdded = true;
 
@@ -297,19 +321,27 @@ class GeocoderApp {
     }
 
     onOverlayRemove(e) {
-        // Check if any overlays are still active
-        let hasActiveOverlay = false;
-        for (let name in this.overlayLayers) {
-            if (this.map.hasLayer(this.overlayLayers[name])) {
-                hasActiveOverlay = true;
-                break;
+        // If a real historical map was removed, check if we should activate "No overlay"
+        if (e.layer !== this.noOverlayLayer && this.overlayLayers[e.name]) {
+            // Check if any historical overlays are still active
+            let hasActiveOverlay = false;
+            for (let name in this.overlayLayers) {
+                if (this.map.hasLayer(this.overlayLayers[name])) {
+                    hasActiveOverlay = true;
+                    break;
+                }
             }
-        }
 
-        // Remove opacity control if no overlays are active
-        if (!hasActiveOverlay && this.opacityControlAdded) {
-            this.map.removeControl(this.opacityControl);
-            this.opacityControlAdded = false;
+            // If no historical overlays are active, add "No overlay" back
+            if (!hasActiveOverlay && !this.map.hasLayer(this.noOverlayLayer)) {
+                this.noOverlayLayer.addTo(this.map);
+            }
+
+            // Remove opacity control if no overlays are active
+            if (!hasActiveOverlay && this.opacityControlAdded) {
+                this.map.removeControl(this.opacityControl);
+                this.opacityControlAdded = false;
+            }
         }
 
         this.syncMarkerDragState();
@@ -877,6 +909,11 @@ class GeocoderApp {
             // Add to layer control
             this.layerControl.addOverlay(overlay, mapName, 'Historical Maps');
 
+            // Remove "No overlay" dummy layer since we're loading a real map
+            if (this.map.hasLayer(this.noOverlayLayer)) {
+                this.map.removeLayer(this.noOverlayLayer);
+            }
+
             // Add to map
             overlay.addTo(this.map);
 
@@ -944,6 +981,7 @@ class GeocoderApp {
             }
 
             this.geocodedPoints = result.points || [];
+            this.streetColorMap = null; // Invalidate cache when points change
             this.renderMarkers();
         } catch (error) {
             // Error already handled
@@ -997,7 +1035,23 @@ class GeocoderApp {
         }
     }
 
-    getStreetColor(street) {
+    calculateHaversineDistance(lat1, lon1, lat2, lon2) {
+        // Calculate distance between two lat/lon points in meters using Haversine formula
+        const R = 6371000; // Earth's radius in meters
+        const toRad = (deg) => deg * Math.PI / 180;
+
+        const dLat = toRad(lat2 - lat1);
+        const dLon = toRad(lon2 - lon1);
+
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                  Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+                  Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+
+    buildStreetColorMap() {
         // Define a nice, differentiable color palette
         const colorPalette = [
             '#e74c3c',  // Red
@@ -1022,15 +1076,108 @@ class GeocoderApp {
             '#e84393',  // Pink
         ];
 
-        // Create a simple hash from the street name
-        let hash = 0;
-        for (let i = 0; i < street.length; i++) {
-            hash = ((hash << 5) - hash) + street.charCodeAt(i);
-            hash = hash & hash; // Convert to 32bit integer
+        // Step 1: Calculate centroid for each street
+        const streetData = {};
+        this.geocodedPoints.forEach(point => {
+            if (!point.street || !this.isValidCoordinate(point.lat) || !this.isValidCoordinate(point.lon)) {
+                return;
+            }
+
+            if (!streetData[point.street]) {
+                streetData[point.street] = {
+                    latSum: 0,
+                    lonSum: 0,
+                    count: 0
+                };
+            }
+
+            streetData[point.street].latSum += point.lat;
+            streetData[point.street].lonSum += point.lon;
+            streetData[point.street].count += 1;
+        });
+
+        // Calculate centroids
+        const streets = Object.keys(streetData).map(street => ({
+            name: street,
+            lat: streetData[street].latSum / streetData[street].count,
+            lon: streetData[street].lonSum / streetData[street].count,
+            count: streetData[street].count
+        }));
+
+        // Sort by count (descending) - assign colors to important streets first
+        streets.sort((a, b) => b.count - a.count);
+
+        // Step 2: Greedy graph coloring based on spatial proximity
+        const PROXIMITY_THRESHOLD = 500; // meters - streets within this distance are considered "nearby"
+        const colorMap = {};
+
+        streets.forEach(street => {
+            // Find nearby streets that already have colors assigned
+            const nearbyColors = new Set();
+
+            streets.forEach(otherStreet => {
+                if (otherStreet.name === street.name) return;
+                if (colorMap[otherStreet.name] === undefined) return; // Skip if not colored yet
+
+                const distance = this.calculateHaversineDistance(
+                    street.lat, street.lon,
+                    otherStreet.lat, otherStreet.lon
+                );
+
+                if (distance < PROXIMITY_THRESHOLD) {
+                    nearbyColors.add(colorMap[otherStreet.name]);
+                }
+            });
+
+            // Assign the first available color not used by nearby streets
+            let assignedColor = 0;
+            for (let i = 0; i < colorPalette.length; i++) {
+                if (!nearbyColors.has(i)) {
+                    assignedColor = i;
+                    break;
+                }
+            }
+
+            colorMap[street.name] = assignedColor;
+        });
+
+        return colorMap;
+    }
+
+    getStreetColor(street) {
+        const colorPalette = [
+            '#e74c3c',  // Red
+            '#3498db',  // Blue
+            '#2ecc71',  // Green
+            '#f39c12',  // Orange
+            '#9b59b6',  // Purple
+            '#1abc9c',  // Teal
+            '#e67e22',  // Carrot
+            '#8e44ad',  // Deep purple
+            '#16a085',  // Dark teal
+            '#c0392b',  // Dark red
+            '#d35400',  // Burnt orange
+            '#2c3e50',  // Midnight blue
+            '#2980b9',  // Sky blue
+            '#27ae60',  // Forest green
+            '#f1c40f',  // Sunflower
+            '#7f8c8d',  // Flat gray
+            '#c0399f',  // Magenta
+            '#34495e',  // Dark slate
+            '#95a5a6',  // Silver
+            '#e84393',  // Pink
+        ];
+
+        // Build color map if not cached
+        if (!this.streetColorMap && this.geocodedPoints && this.geocodedPoints.length > 0) {
+            this.streetColorMap = this.buildStreetColorMap();
         }
 
-        // Use the hash to pick a color (ensure positive index)
-        const colorIndex = Math.abs(hash) % colorPalette.length;
+        // Look up color for this street
+        const colorIndex = this.streetColorMap && this.streetColorMap[street] !== undefined
+            ? this.streetColorMap[street]
+            : 0;
+
         return colorPalette[colorIndex];
     }
 
