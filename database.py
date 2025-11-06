@@ -239,6 +239,74 @@ class Database:
         conn.close()
         return imported
 
+    def import_backup_from_csv(self, csv_data: str) -> int:
+        """
+        Import addresses from a backup CSV export (restores all fields including status)
+
+        Expected CSV format matches export_to_csv() output:
+        street, number, x_coord, y_coord, lat, lon, status, timestamp
+
+        Args:
+            csv_data: CSV content as string from a backup export
+
+        Returns:
+            Number of addresses imported
+        """
+        from io import StringIO
+
+        # Parse CSV from string
+        df = pd.read_csv(StringIO(csv_data))
+
+        # Validate required columns
+        if 'street' not in df.columns or 'number' not in df.columns:
+            raise ValueError("CSV must contain 'street' and 'number' columns")
+
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        # Clear existing data
+        cursor.execute('DELETE FROM addresses')
+        cursor.execute('DELETE FROM undo_history')
+
+        # Insert addresses with all fields
+        imported = 0
+
+        for idx, row in df.iterrows():
+            try:
+                # Extract all fields, handling missing columns
+                street = str(row['street'])
+                number = str(row['number'])
+                x_coord = float(row['x_coord']) if 'x_coord' in df.columns and pd.notna(row['x_coord']) else None
+                y_coord = float(row['y_coord']) if 'y_coord' in df.columns and pd.notna(row['y_coord']) else None
+                lat = float(row['lat']) if 'lat' in df.columns and pd.notna(row['lat']) else None
+                lon = float(row['lon']) if 'lon' in df.columns and pd.notna(row['lon']) else None
+                status = str(row['status']) if 'status' in df.columns and pd.notna(row['status']) else 'pending'
+                timestamp = str(row['timestamp']) if 'timestamp' in df.columns and pd.notna(row['timestamp']) else None
+
+                # Use idx as sort_order if not in CSV (preserve import order)
+                sort_order = int(row['sort_order']) if 'sort_order' in df.columns and pd.notna(row['sort_order']) else idx
+
+                # Validate status value
+                if status not in ['pending', 'geocoded', 'skipped']:
+                    status = 'pending'
+
+                cursor.execute('''
+                    INSERT INTO addresses (street, number, x_coord, y_coord, lat, lon, status, sort_order, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (street, number, x_coord, y_coord, lat, lon, status, sort_order, timestamp))
+
+                imported += 1
+            except sqlite3.IntegrityError:
+                # Skip duplicates
+                pass
+            except (ValueError, TypeError) as e:
+                # Skip rows with invalid data
+                pass
+
+        conn.commit()
+        conn.close()
+        return imported
+
     def get_current_address(self, current_x: float = None, current_y: float = None,
                            current_lat: float = None, current_lon: float = None,
                            last_street: str = None) -> Optional[Dict]:

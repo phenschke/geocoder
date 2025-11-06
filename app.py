@@ -68,6 +68,29 @@ def import_csv_data():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/import_backup', methods=['POST'])
+def import_backup():
+    """Import addresses from a backup CSV export (restores all fields)"""
+    try:
+        data = request.json
+        csv_data = data.get('csv_data')
+
+        if not csv_data:
+            return jsonify({'error': 'No CSV data provided'}), 400
+
+        count = db.import_backup_from_csv(csv_data)
+        return jsonify({
+            'success': True,
+            'imported': count,
+            'message': f'Restored {count} addresses from backup'
+        })
+
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/current', methods=['GET'])
 def get_current():
     """Get current address to geocode with optional proximity-based ordering"""

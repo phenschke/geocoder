@@ -360,7 +360,7 @@ class GeocoderApp {
     }
 
     setupEventListeners() {
-        // CSV file selection
+        // CSV file selection (handles both new imports and backup restores)
         document.getElementById('csvFile').addEventListener('change', (e) => this.onFileSelected(e));
 
         // Modal controls
@@ -502,10 +502,64 @@ class GeocoderApp {
             // Parse CSV
             this.parseCSV(text);
 
-            // Show modal with preview
-            this.showImportModal();
+            // Detect if this is a backup CSV or new address list
+            if (this.isBackupCSV()) {
+                // Handle as backup restore
+                await this.handleBackupRestore(text, e.target);
+            } else {
+                // Handle as new address import
+                this.showImportModal();
+            }
         } catch (error) {
             alert('Error reading file: ' + error.message);
+            // Clear the file input
+            e.target.value = '';
+        }
+    }
+
+    async handleBackupRestore(text, fileInput) {
+        // Confirm before restoring
+        const confirmRestore = confirm(
+            'This appears to be a backup export. Restoring will replace ALL existing data. Are you sure you want to continue?'
+        );
+
+        if (!confirmRestore) {
+            // Clear the file input
+            fileInput.value = '';
+            return;
+        }
+
+        try {
+            // Send to backup import endpoint
+            const response = await fetch('/api/import_backup', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    csv_data: text
+                })
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                alert(`Successfully restored ${result.imported} addresses from backup!`);
+
+                // Reload the application state
+                await this.loadCurrentAddress();
+                await this.updateProgress();
+                await this.loadStreets();
+                await this.loadAddressList();
+                this.scheduleLoadGeocodedPoints(0);
+            } else {
+                alert('Error restoring backup: ' + (result.error || 'Unknown error'));
+            }
+        } catch (error) {
+            alert('Error restoring backup: ' + error.message);
+        } finally {
+            // Clear the file input
+            fileInput.value = '';
         }
     }
 
@@ -528,6 +582,14 @@ class GeocoderApp {
 
         // Store full CSV data
         this.csvData = text;
+    }
+
+    isBackupCSV() {
+        // Detect if CSV is a backup export by checking for backup-specific columns
+        const backupColumns = ['status', 'timestamp', 'sort_order'];
+
+        // Check if any of the backup columns are present
+        return backupColumns.some(col => this.csvColumns.includes(col));
     }
 
     parseCSVLine(line) {
