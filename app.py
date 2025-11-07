@@ -130,6 +130,7 @@ def geocode():
         y = data.get('y')
         lat = data.get('lat')
         lon = data.get('lon')
+        map_name = data.get('map_name')
 
         # Require address_id and either (x, y) or (lat, lon)
         if address_id is None:
@@ -141,7 +142,7 @@ def geocode():
         if not (has_pixel_coords or has_geo_coords):
             return jsonify({'error': 'Missing coordinates (need x,y or lat,lon)'}), 400
 
-        success = db.geocode_address(address_id, x, y, lat, lon)
+        success = db.geocode_address(address_id, x, y, lat, lon, map_name)
 
         if not success:
             return jsonify({'error': 'Failed to geocode address'}), 500

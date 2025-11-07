@@ -36,6 +36,7 @@ class Database:
                 status TEXT DEFAULT 'pending',
                 sort_order INTEGER NOT NULL,
                 timestamp TEXT,
+                map_name TEXT,
                 UNIQUE(street, number)
             )
         ''')
@@ -51,6 +52,7 @@ class Database:
                 old_lat REAL,
                 old_lon REAL,
                 old_status TEXT,
+                old_map_name TEXT,
                 timestamp TEXT NOT NULL,
                 FOREIGN KEY (address_id) REFERENCES addresses(id)
             )
@@ -123,9 +125,12 @@ class Database:
         # Insert addresses in order
         imported = 0
         has_coords = lat_column and lon_column and lat_column in df.columns and lon_column in df.columns
+        has_map_name = 'map_name' in df.columns
 
         for idx, row in df.iterrows():
             try:
+                map_name = str(row['map_name']) if has_map_name and pd.notna(row['map_name']) else None
+
                 if has_coords:
                     # Import with pre-geocoded coordinates
                     lat = row[lat_column]
@@ -133,22 +138,22 @@ class Database:
                     # Check if lat/lon are valid (not NaN/empty)
                     if pd.notna(lat) and pd.notna(lon):
                         cursor.execute('''
-                            INSERT INTO addresses (street, number, lat, lon, status, sort_order, timestamp)
-                            VALUES (?, ?, ?, ?, 'geocoded', ?, ?)
+                            INSERT INTO addresses (street, number, lat, lon, status, sort_order, timestamp, map_name)
+                            VALUES (?, ?, ?, ?, 'geocoded', ?, ?, ?)
                         ''', (str(row[street_column]), str(row[number_column]),
-                              float(lat), float(lon), idx, datetime.now().isoformat()))
+                              float(lat), float(lon), idx, datetime.now().isoformat(), map_name))
                     else:
                         # No valid coords, insert as pending
                         cursor.execute('''
-                            INSERT INTO addresses (street, number, status, sort_order)
-                            VALUES (?, ?, 'pending', ?)
-                        ''', (str(row[street_column]), str(row[number_column]), idx))
+                            INSERT INTO addresses (street, number, status, sort_order, map_name)
+                            VALUES (?, ?, 'pending', ?, ?)
+                        ''', (str(row[street_column]), str(row[number_column]), idx, map_name))
                 else:
                     # Import without coordinates
                     cursor.execute('''
-                        INSERT INTO addresses (street, number, status, sort_order)
-                        VALUES (?, ?, 'pending', ?)
-                    ''', (str(row[street_column]), str(row[number_column]), idx))
+                        INSERT INTO addresses (street, number, status, sort_order, map_name)
+                        VALUES (?, ?, 'pending', ?, ?)
+                    ''', (str(row[street_column]), str(row[number_column]), idx, map_name))
                 imported += 1
             except sqlite3.IntegrityError:
                 # Skip duplicates
@@ -204,9 +209,12 @@ class Database:
         # Insert addresses in order
         imported = 0
         has_coords = lat_column and lon_column and lat_column in df.columns and lon_column in df.columns
+        has_map_name = 'map_name' in df.columns
 
         for idx, row in df.iterrows():
             try:
+                map_name = str(row['map_name']) if has_map_name and pd.notna(row['map_name']) else None
+
                 if has_coords:
                     # Import with pre-geocoded coordinates
                     lat = row[lat_column]
@@ -214,22 +222,22 @@ class Database:
                     # Check if lat/lon are valid (not NaN/empty)
                     if pd.notna(lat) and pd.notna(lon):
                         cursor.execute('''
-                            INSERT INTO addresses (street, number, lat, lon, status, sort_order, timestamp)
-                            VALUES (?, ?, ?, ?, 'geocoded', ?, ?)
+                            INSERT INTO addresses (street, number, lat, lon, status, sort_order, timestamp, map_name)
+                            VALUES (?, ?, ?, ?, 'geocoded', ?, ?, ?)
                         ''', (str(row[street_column]), str(row[number_column]),
-                              float(lat), float(lon), idx, datetime.now().isoformat()))
+                              float(lat), float(lon), idx, datetime.now().isoformat(), map_name))
                     else:
                         # No valid coords, insert as pending
                         cursor.execute('''
-                            INSERT INTO addresses (street, number, status, sort_order)
-                            VALUES (?, ?, 'pending', ?)
-                        ''', (str(row[street_column]), str(row[number_column]), idx))
+                            INSERT INTO addresses (street, number, status, sort_order, map_name)
+                            VALUES (?, ?, 'pending', ?, ?)
+                        ''', (str(row[street_column]), str(row[number_column]), idx, map_name))
                 else:
                     # Import without coordinates
                     cursor.execute('''
-                        INSERT INTO addresses (street, number, status, sort_order)
-                        VALUES (?, ?, 'pending', ?)
-                    ''', (str(row[street_column]), str(row[number_column]), idx))
+                        INSERT INTO addresses (street, number, status, sort_order, map_name)
+                        VALUES (?, ?, 'pending', ?, ?)
+                    ''', (str(row[street_column]), str(row[number_column]), idx, map_name))
                 imported += 1
             except sqlite3.IntegrityError:
                 # Skip duplicates
@@ -282,6 +290,7 @@ class Database:
                 lon = float(row['lon']) if 'lon' in df.columns and pd.notna(row['lon']) else None
                 status = str(row['status']) if 'status' in df.columns and pd.notna(row['status']) else 'pending'
                 timestamp = str(row['timestamp']) if 'timestamp' in df.columns and pd.notna(row['timestamp']) else None
+                map_name = str(row['map_name']) if 'map_name' in df.columns and pd.notna(row['map_name']) else None
 
                 # Use idx as sort_order if not in CSV (preserve import order)
                 sort_order = int(row['sort_order']) if 'sort_order' in df.columns and pd.notna(row['sort_order']) else idx
@@ -291,9 +300,9 @@ class Database:
                     status = 'pending'
 
                 cursor.execute('''
-                    INSERT INTO addresses (street, number, x_coord, y_coord, lat, lon, status, sort_order, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (street, number, x_coord, y_coord, lat, lon, status, sort_order, timestamp))
+                    INSERT INTO addresses (street, number, x_coord, y_coord, lat, lon, status, sort_order, timestamp, map_name)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (street, number, x_coord, y_coord, lat, lon, status, sort_order, timestamp, map_name))
 
                 imported += 1
             except sqlite3.IntegrityError:
@@ -339,7 +348,7 @@ class Database:
             return dict(row)
         return None
 
-    def geocode_address(self, address_id: int, x: float = None, y: float = None, lat: float = None, lon: float = None) -> bool:
+    def geocode_address(self, address_id: int, x: float = None, y: float = None, lat: float = None, lon: float = None, map_name: str = None) -> bool:
         """
         Save geocoded coordinates for an address
 
@@ -349,6 +358,7 @@ class Database:
             y: Y pixel coordinate (optional)
             lat: Latitude (optional)
             lon: Longitude (optional)
+            map_name: Name of the map layer used for geocoding (optional)
 
         Returns:
             True if successful
@@ -367,19 +377,19 @@ class Database:
         # Save to undo history
         cursor.execute('''
             INSERT INTO undo_history (address_id, action_type, old_x_coord, old_y_coord,
-                                     old_lat, old_lon, old_status, timestamp)
-            VALUES (?, 'geocode', ?, ?, ?, ?, ?, ?)
+                                     old_lat, old_lon, old_status, old_map_name, timestamp)
+            VALUES (?, 'geocode', ?, ?, ?, ?, ?, ?, ?)
         ''', (address_id, old_state['x_coord'], old_state['y_coord'],
               old_state['lat'], old_state['lon'], old_state['status'],
-              datetime.now().isoformat()))
+              old_state['map_name'], datetime.now().isoformat()))
 
         # Update address
         cursor.execute('''
             UPDATE addresses
             SET x_coord = ?, y_coord = ?, lat = ?, lon = ?,
-                status = 'geocoded', timestamp = ?
+                status = 'geocoded', timestamp = ?, map_name = ?
             WHERE id = ?
-        ''', (x, y, lat, lon, datetime.now().isoformat(), address_id))
+        ''', (x, y, lat, lon, datetime.now().isoformat(), map_name, address_id))
 
         # Clean up old undo history (keep only last N actions)
         cursor.execute('''
@@ -411,11 +421,11 @@ class Database:
         # Save to undo history
         cursor.execute('''
             INSERT INTO undo_history (address_id, action_type, old_x_coord, old_y_coord,
-                                     old_lat, old_lon, old_status, timestamp)
-            VALUES (?, 'skip', ?, ?, ?, ?, ?, ?)
+                                     old_lat, old_lon, old_status, old_map_name, timestamp)
+            VALUES (?, 'skip', ?, ?, ?, ?, ?, ?, ?)
         ''', (address_id, old_state['x_coord'], old_state['y_coord'],
               old_state['lat'], old_state['lon'], old_state['status'],
-              datetime.now().isoformat()))
+              old_state['map_name'], datetime.now().isoformat()))
 
         # Update address
         cursor.execute('''
@@ -449,11 +459,11 @@ class Database:
         # Restore old state
         cursor.execute('''
             UPDATE addresses
-            SET x_coord = ?, y_coord = ?, lat = ?, lon = ?, status = ?
+            SET x_coord = ?, y_coord = ?, lat = ?, lon = ?, status = ?, map_name = ?
             WHERE id = ?
         ''', (undo_record['old_x_coord'], undo_record['old_y_coord'],
               undo_record['old_lat'], undo_record['old_lon'],
-              undo_record['old_status'], undo_record['address_id']))
+              undo_record['old_status'], undo_record['old_map_name'], undo_record['address_id']))
 
         # Remove undo record
         cursor.execute('DELETE FROM undo_history WHERE id = ?', (undo_record['id'],))
@@ -525,7 +535,7 @@ class Database:
         conn = self.get_connection()
 
         df = pd.read_sql_query('''
-            SELECT street, number, x_coord, y_coord, lat, lon, status, timestamp
+            SELECT street, number, x_coord, y_coord, lat, lon, status, timestamp, map_name
             FROM addresses
             ORDER BY sort_order
         ''', conn)
@@ -618,7 +628,7 @@ class Database:
 
         # Get addresses
         query = f'''
-            SELECT id, street, number, x_coord, y_coord, lat, lon, status, timestamp, sort_order
+            SELECT id, street, number, x_coord, y_coord, lat, lon, status, timestamp, sort_order, map_name
             FROM addresses
             WHERE {where_clause}
             ORDER BY {order_clause}
@@ -688,11 +698,11 @@ class Database:
         # Save to undo history
         cursor.execute('''
             INSERT INTO undo_history (address_id, action_type, old_x_coord, old_y_coord,
-                                     old_lat, old_lon, old_status, timestamp)
-            VALUES (?, 'update_position', ?, ?, ?, ?, ?, ?)
+                                     old_lat, old_lon, old_status, old_map_name, timestamp)
+            VALUES (?, 'update_position', ?, ?, ?, ?, ?, ?, ?)
         ''', (address_id, address['x_coord'], address['y_coord'],
               address['lat'], address['lon'], address['status'],
-              datetime.now().isoformat()))
+              address['map_name'], datetime.now().isoformat()))
 
         # Update position
         cursor.execute('''

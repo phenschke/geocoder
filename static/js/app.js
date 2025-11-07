@@ -5,6 +5,7 @@ class GeocoderApp {
         this.baseLayers = {};
         this.overlayLayers = {};
         this.currentBaseLayer = null;
+        this.currentHistoricalMap = null; // Track currently active historical overlay map name
         this.historicalOverlays = {};
         this.overlayBounds = null;
         this.canvasMarkerLayer = null;
@@ -295,6 +296,7 @@ class GeocoderApp {
                     this.map.removeLayer(this.overlayLayers[name]);
                 }
             }
+            this.currentHistoricalMap = null; // Clear current map
             return;
         }
 
@@ -303,6 +305,8 @@ class GeocoderApp {
             if (this.map.hasLayer(this.noOverlayLayer)) {
                 this.map.removeLayer(this.noOverlayLayer);
             }
+            // Track the currently active historical map
+            this.currentHistoricalMap = e.name;
         }
 
         // Show opacity control when any real overlay is added
@@ -323,6 +327,11 @@ class GeocoderApp {
     onOverlayRemove(e) {
         // If a real historical map was removed, check if we should activate "No overlay"
         if (e.layer !== this.noOverlayLayer && this.overlayLayers[e.name]) {
+            // Clear current map if this overlay was the active one
+            if (this.currentHistoricalMap === e.name) {
+                this.currentHistoricalMap = null;
+            }
+
             // Check if any historical overlays are still active
             let hasActiveOverlay = false;
             for (let name in this.overlayLayers) {
@@ -1771,7 +1780,8 @@ class GeocoderApp {
                 x: null,  // We're using lat/lon now instead of pixel coords
                 y: null,
                 lat: lat,
-                lon: lon
+                lon: lon,
+                map_name: this.currentHistoricalMap  // Include currently active historical map
             });
 
             // Flash marker at geocoded location
