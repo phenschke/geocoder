@@ -37,7 +37,7 @@ class Database:
                 sort_order INTEGER NOT NULL,
                 timestamp TEXT,
                 map_name TEXT,
-                UNIQUE(street, number)
+                UNIQUE(street, number, map_name)
             )
         ''')
 
@@ -352,8 +352,11 @@ class Database:
         """
         Save geocoded coordinates for an address
 
+        If an entry already exists for (street, number, map_name), it will be updated.
+        If not, a new entry will be inserted.
+
         Args:
-            address_id: ID of address to geocode
+            address_id: ID of any address record with the same street/number
             x: X pixel coordinate (optional)
             y: Y pixel coordinate (optional)
             lat: Latitude (optional)
@@ -366,30 +369,57 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        # Get current state for undo
-        cursor.execute('SELECT * FROM addresses WHERE id = ?', (address_id,))
-        old_state = cursor.fetchone()
+        # Get street and number from the provided address_id
+        cursor.execute('SELECT street, number FROM addresses WHERE id = ?', (address_id,))
+        address_info = cursor.fetchone()
 
-        if not old_state:
+        if not address_info:
             conn.close()
             return False
 
-        # Save to undo history
-        cursor.execute('''
-            INSERT INTO undo_history (address_id, action_type, old_x_coord, old_y_coord,
-                                     old_lat, old_lon, old_status, old_map_name, timestamp)
-            VALUES (?, 'geocode', ?, ?, ?, ?, ?, ?, ?)
-        ''', (address_id, old_state['x_coord'], old_state['y_coord'],
-              old_state['lat'], old_state['lon'], old_state['status'],
-              old_state['map_name'], datetime.now().isoformat()))
+        street = address_info['street']
+        number = address_info['number']
 
-        # Update address
+        # Check if an entry exists for (street, number, map_name)
         cursor.execute('''
-            UPDATE addresses
-            SET x_coord = ?, y_coord = ?, lat = ?, lon = ?,
-                status = 'geocoded', timestamp = ?, map_name = ?
-            WHERE id = ?
-        ''', (x, y, lat, lon, datetime.now().isoformat(), map_name, address_id))
+            SELECT * FROM addresses
+            WHERE street = ? AND number = ? AND map_name IS ?
+        ''', (street, number, map_name))
+        existing_entry = cursor.fetchone()
+
+        if existing_entry:
+            # Update existing entry for this map
+            target_id = existing_entry['id']
+
+            # Save to undo history
+            cursor.execute('''
+                INSERT INTO undo_history (address_id, action_type, old_x_coord, old_y_coord,
+                                         old_lat, old_lon, old_status, old_map_name, timestamp)
+                VALUES (?, 'geocode', ?, ?, ?, ?, ?, ?, ?)
+            ''', (target_id, existing_entry['x_coord'], existing_entry['y_coord'],
+                  existing_entry['lat'], existing_entry['lon'], existing_entry['status'],
+                  existing_entry['map_name'], datetime.now().isoformat()))
+
+            # Update address
+            cursor.execute('''
+                UPDATE addresses
+                SET x_coord = ?, y_coord = ?, lat = ?, lon = ?,
+                    status = 'geocoded', timestamp = ?
+                WHERE id = ?
+            ''', (x, y, lat, lon, datetime.now().isoformat(), target_id))
+        else:
+            # Insert new entry for this map
+            # Get the sort_order from the original address
+            cursor.execute('SELECT sort_order FROM addresses WHERE id = ?', (address_id,))
+            sort_order_row = cursor.fetchone()
+            sort_order = sort_order_row['sort_order'] if sort_order_row else 0
+
+            cursor.execute('''
+                INSERT INTO addresses (street, number, x_coord, y_coord, lat, lon,
+                                     status, sort_order, timestamp, map_name)
+                VALUES (?, ?, ?, ?, ?, ?, 'geocoded', ?, ?, ?)
+            ''', (street, number, x, y, lat, lon, sort_order,
+                  datetime.now().isoformat(), map_name))
 
         # Clean up old undo history (keep only last N actions)
         cursor.execute('''
@@ -502,7 +532,7 @@ class Database:
         cursor = conn.cursor()
 
         query = '''
-            SELECT id, street, number, x_coord, y_coord, lat, lon
+            SELECT id, street, number, x_coord, y_coord, lat, lon, map_name
             FROM addresses
             WHERE status = 'geocoded' AND lat IS NOT NULL AND lon IS NOT NULL
         '''

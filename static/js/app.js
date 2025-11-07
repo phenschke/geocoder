@@ -8,11 +8,12 @@ class GeocoderApp {
         this.currentHistoricalMap = null; // Track currently active historical overlay map name
         this.historicalOverlays = {};
         this.overlayBounds = null;
-        this.canvasMarkerLayer = null;
+        this.canvasMarkerLayers = {}; // Dictionary of marker layers keyed by map_name
+        this.markerLayersByMapName = {}; // Points grouped by map_name
         this.activeMarker = null;
         this.selectedMarkerId = null; // Track which marker is selected for dragging
         this.currentAddress = null;
-        this.geocodedPoints = [];
+        this.geocodedPoints = []; // All points (for compatibility)
         this.streetColorMap = null; // Cache for spatially-aware street color assignments
         this.layerControl = null;
         this.opacityControl = null;
@@ -112,21 +113,17 @@ class GeocoderApp {
         // Add default base layer (OSM)
         this.baseLayers['OpenStreetMap'].addTo(this.map);
 
-        // Create canvas layer for markers
-        this.canvasMarkerLayer = L.canvasIconLayer({ padding: 0.3 });
-        this.canvasMarkerLayer.addTo(this.map);
-
         // Create "No overlay" dummy layer for deselecting all historical maps
         this.noOverlayLayer = L.layerGroup();
         this.noOverlayLayer.addTo(this.map);
 
-        // Initialize grouped layer control (will be populated with overlays later)
+        // Initialize grouped layer control (marker layers will be added dynamically)
         const groupedOverlays = {
             'Historical Maps': {
                 'No overlay': this.noOverlayLayer
             },
-            'Data Layers': {
-                'Geocoded markers': this.canvasMarkerLayer
+            'Geocoded Markers': {
+                // Marker layers will be added dynamically as data is loaded
             }
         };
 
@@ -1004,10 +1001,64 @@ class GeocoderApp {
 
             this.geocodedPoints = result.points || [];
             this.streetColorMap = null; // Invalidate cache when points change
+
+            // Group points by map_name
+            this.groupPointsByMap();
+
+            // Create/update marker layers for each map
+            this.updateMarkerLayers();
+
+            // Render markers on all layers
             this.renderMarkers();
         } catch (error) {
             // Error already handled
         }
+    }
+
+    groupPointsByMap() {
+        // Group points by map_name
+        this.markerLayersByMapName = {};
+
+        this.geocodedPoints.forEach(point => {
+            const mapName = point.map_name || 'Unknown Map';
+            if (!this.markerLayersByMapName[mapName]) {
+                this.markerLayersByMapName[mapName] = [];
+            }
+            this.markerLayersByMapName[mapName].push(point);
+        });
+    }
+
+    updateMarkerLayers() {
+        // Get list of map names from the grouped points
+        const mapNames = Object.keys(this.markerLayersByMapName);
+
+        // Remove layers that no longer have points
+        for (let mapName in this.canvasMarkerLayers) {
+            if (!mapNames.includes(mapName)) {
+                // Remove from map and layer control
+                if (this.map.hasLayer(this.canvasMarkerLayers[mapName])) {
+                    this.map.removeLayer(this.canvasMarkerLayers[mapName]);
+                }
+                this.layerControl.removeLayer(this.canvasMarkerLayers[mapName]);
+                delete this.canvasMarkerLayers[mapName];
+            }
+        }
+
+        // Create new layers for maps that don't have them yet
+        mapNames.forEach(mapName => {
+            if (!this.canvasMarkerLayers[mapName]) {
+                // Create new canvas marker layer
+                const layer = L.canvasIconLayer({ padding: 0.3 });
+                this.canvasMarkerLayers[mapName] = layer;
+
+                // Add to map
+                layer.addTo(this.map);
+
+                // Add to layer control
+                const displayName = mapName === 'Unknown Map' ? '(No map)' : `${mapName} markers`;
+                this.layerControl.addOverlay(layer, displayName, 'Geocoded Markers');
+            }
+        });
     }
 
     scheduleLoadGeocodedPoints(delay = 200) {
@@ -1309,47 +1360,54 @@ class GeocoderApp {
     }
 
     renderMarkers() {
-        if (!this.canvasMarkerLayer) return;
-
-        const markers = [];
         const currentId = this.currentAddress ? this.currentAddress.id : null;
         const draggingId = this.draggingMarker ? this.draggingMarker.id : null;
 
-        this.geocodedPoints.forEach((point, index) => {
-            if (!this.isValidCoordinate(point.lat) || !this.isValidCoordinate(point.lon)) {
-                return;
-            }
+        // Render markers for each map layer
+        for (let mapName in this.markerLayersByMapName) {
+            const layer = this.canvasMarkerLayers[mapName];
+            if (!layer) continue;
 
-            if (draggingId != null && point.id === draggingId) {
-                return; // Skip while dragging; draggable marker handles display
-            }
+            const points = this.markerLayersByMapName[mapName];
+            const markers = [];
 
-            const isRecent = index < 5;
-            const isActive = currentId != null && point.id === currentId;
-            const size = this.getMarkerSize(isRecent);
-            const color = this.getStreetColor(point.street || '');
+            points.forEach((point, index) => {
+                if (!this.isValidCoordinate(point.lat) || !this.isValidCoordinate(point.lon)) {
+                    return;
+                }
 
-            markers.push({
-                id: point.id,
-                lat: point.lat,
-                lon: point.lon,
-                color,
-                fillStyle: color,
-                strokeStyle: '#ffffff',
-                lineWidth: isActive ? 3 : 2,
-                label: point.number != null ? String(point.number) : '',
-                fontSize: Math.max(9, Math.round(size * 0.5)),
-                fontWeight: isActive ? '700' : '600',
-                textColor: '#ffffff',
-                size: isActive ? size + 4 : size,
-                highlight: isActive,
-                highlightColor: '#2ecc71',
-                highlightWidth: 2,
-                opacity: 1
+                if (draggingId != null && point.id === draggingId) {
+                    return; // Skip while dragging; draggable marker handles display
+                }
+
+                const isRecent = index < 5;
+                const isActive = currentId != null && point.id === currentId;
+                const size = this.getMarkerSize(isRecent);
+                const color = this.getStreetColor(point.street || '');
+
+                markers.push({
+                    id: point.id,
+                    lat: point.lat,
+                    lon: point.lon,
+                    color,
+                    fillStyle: color,
+                    strokeStyle: '#ffffff',
+                    lineWidth: isActive ? 3 : 2,
+                    label: point.number != null ? String(point.number) : '',
+                    fontSize: Math.max(9, Math.round(size * 0.5)),
+                    fontWeight: isActive ? '700' : '600',
+                    textColor: '#ffffff',
+                    size: isActive ? size + 4 : size,
+                    highlight: isActive,
+                    highlightColor: '#2ecc71',
+                    highlightWidth: 2,
+                    opacity: 1
+                });
             });
-        });
 
-        this.canvasMarkerLayer.setMarkers(markers);
+            layer.setMarkers(markers);
+        }
+
         this.updateActiveMarker();
     }
 
