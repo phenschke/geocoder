@@ -294,6 +294,7 @@ class GeocoderApp {
                 }
             }
             this.currentHistoricalMap = null; // Clear current map
+            this.loadAddressList(); // Reload address list with deduplicated view
             return;
         }
 
@@ -304,6 +305,7 @@ class GeocoderApp {
             }
             // Track the currently active historical map
             this.currentHistoricalMap = e.name;
+            this.loadAddressList(); // Reload address list filtered for this map
         }
 
         // Show opacity control when any real overlay is added
@@ -327,6 +329,7 @@ class GeocoderApp {
             // Clear current map if this overlay was the active one
             if (this.currentHistoricalMap === e.name) {
                 this.currentHistoricalMap = null;
+                this.loadAddressList(); // Reload with deduplicated view
             }
 
             // Check if any historical overlays are still active
@@ -2166,6 +2169,16 @@ class GeocoderApp {
                 params.append('search', this.addressList.searchQuery);
             }
 
+            // Context-aware filtering based on active historical map
+            if (this.currentHistoricalMap) {
+                // When a map is active, show only addresses for that map + addresses not yet geocoded on any map
+                params.append('filter_map', this.currentHistoricalMap);
+                params.append('include_null', 'true');
+            } else {
+                // When no map is active, show deduplicated view (one entry per street/number)
+                params.append('deduplicate', 'true');
+            }
+
             const result = await this.apiCall(`/api/addresses?${params}`);
 
             this.addressList.totalPages = result.pages;
@@ -2199,11 +2212,15 @@ class GeocoderApp {
             const isCurrent = this.currentAddress && this.currentAddress.id === address.id;
             const statusClass = `status-${address.status}`;
 
+            // Show multi-map indicator if address exists on multiple maps
+            const mapCount = address.map_count || 0;
+            const multiMapBadge = mapCount > 1 ? `<span class="multi-map-badge" title="Geocoded on ${mapCount} maps">• ${mapCount} maps</span>` : '';
+
             return `
                 <tr class="${isCurrent ? 'current-address' : ''}" data-id="${address.id}">
                     <td>${this.escapeHtml(address.street)}</td>
                     <td>${this.escapeHtml(address.number)}</td>
-                    <td><span class="status-badge ${statusClass}">${address.status}</span></td>
+                    <td><span class="status-badge ${statusClass}">${address.status}</span>${multiMapBadge}</td>
                 </tr>
             `;
         }).join('');

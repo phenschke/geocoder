@@ -583,7 +583,10 @@ class Database:
         sort_order: str = 'ASC',
         filter_status: str = None,
         filter_street: str = None,
-        search: str = None
+        search: str = None,
+        filter_map: str = None,
+        include_null_map: bool = False,
+        deduplicate: bool = False
     ) -> Dict:
         """
         Get paginated list of addresses with filtering and sorting
@@ -596,6 +599,9 @@ class Database:
             filter_status: Filter by status (pending, geocoded, skipped)
             filter_street: Filter by exact street name
             search: Search in street name or house number
+            filter_map: Filter by map_name (exact match)
+            include_null_map: Include addresses with map_name = NULL (when filter_map is set)
+            deduplicate: Show only one entry per (street, number) - most recent
 
         Returns:
             Dict with addresses, total, pages, current_page
@@ -619,6 +625,15 @@ class Database:
             where_clauses.append('(street LIKE ? OR number LIKE ?)')
             search_pattern = f'%{search}%'
             params.extend([search_pattern, search_pattern])
+
+        # Map filtering
+        if filter_map is not None:
+            if include_null_map:
+                where_clauses.append('(map_name = ? OR map_name IS NULL)')
+                params.append(filter_map)
+            else:
+                where_clauses.append('map_name = ?')
+                params.append(filter_map)
 
         where_clause = ' AND '.join(where_clauses) if where_clauses else '1=1'
 
@@ -646,8 +661,18 @@ class Database:
         else:
             order_clause = f"{sort_by} {sort_order_upper}"
 
-        # Get total count
-        count_query = f'SELECT COUNT(*) FROM addresses WHERE {where_clause}'
+        # Get total count (depends on deduplication mode)
+        if deduplicate:
+            count_query = f'''
+                SELECT COUNT(*) FROM (
+                    SELECT DISTINCT street, number
+                    FROM addresses
+                    WHERE {where_clause}
+                )
+            '''
+        else:
+            count_query = f'SELECT COUNT(*) FROM addresses WHERE {where_clause}'
+
         cursor.execute(count_query, params)
         total = cursor.fetchone()[0]
 
@@ -656,13 +681,38 @@ class Database:
         page = max(1, min(page, total_pages if total_pages > 0 else 1))
         offset = (page - 1) * per_page
 
-        # Get addresses
-        query = f'''
-            SELECT id, street, number, x_coord, y_coord, lat, lon, status, timestamp, sort_order, map_name
-            FROM addresses
-            WHERE {where_clause}
-            ORDER BY {order_clause}
-        '''
+        # Build main query with map_count subquery
+        if deduplicate:
+            # Deduplicated view: one row per (street, number), with most recent timestamp
+            query = f'''
+                SELECT
+                    a1.id, a1.street, a1.number, a1.x_coord, a1.y_coord, a1.lat, a1.lon,
+                    a1.status, a1.timestamp, a1.sort_order, a1.map_name,
+                    (SELECT COUNT(DISTINCT map_name) FROM addresses a2
+                     WHERE a2.street = a1.street AND a2.number = a1.number
+                     AND a2.map_name IS NOT NULL) as map_count
+                FROM addresses a1
+                WHERE a1.id IN (
+                    SELECT id FROM addresses a3
+                    WHERE a3.street = a1.street AND a3.number = a1.number
+                    ORDER BY timestamp DESC, id DESC
+                    LIMIT 1
+                ) AND {where_clause}
+                ORDER BY {order_clause}
+            '''
+        else:
+            # Normal view: all addresses with map_count
+            query = f'''
+                SELECT
+                    a.id, a.street, a.number, a.x_coord, a.y_coord, a.lat, a.lon,
+                    a.status, a.timestamp, a.sort_order, a.map_name,
+                    (SELECT COUNT(DISTINCT map_name) FROM addresses a2
+                     WHERE a2.street = a.street AND a2.number = a.number
+                     AND a2.map_name IS NOT NULL) as map_count
+                FROM addresses a
+                WHERE {where_clause}
+                ORDER BY {order_clause}
+            '''
 
         # Add pagination unless per_page is 0 (meaning "All")
         if per_page > 0:

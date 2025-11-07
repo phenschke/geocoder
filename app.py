@@ -313,6 +313,9 @@ def get_addresses():
         filter_status = request.args.get('filter_status', None)
         filter_street = request.args.get('filter_street', None)
         search = request.args.get('search', None)
+        filter_map = request.args.get('filter_map', None)
+        include_null_map = request.args.get('include_null', 'false').lower() == 'true'
+        deduplicate = request.args.get('deduplicate', 'false').lower() == 'true'
 
         result = db.get_addresses_paginated(
             page=page,
@@ -321,7 +324,10 @@ def get_addresses():
             sort_order=sort_order,
             filter_status=filter_status,
             filter_street=filter_street,
-            search=search
+            search=search,
+            filter_map=filter_map,
+            include_null_map=include_null_map,
+            deduplicate=deduplicate
         )
 
         return jsonify({
