@@ -38,6 +38,7 @@ class GeocoderApp {
         this.autoAdvanceEnabled = true;
         this.addressListExpanded = false;
         this.currentPageAddresses = []; // Track addresses in current view
+        this.addressListRequestToken = 0; // Track address list requests to prevent race conditions
 
         // CSV import state
         this.csvData = null;
@@ -2150,6 +2151,9 @@ class GeocoderApp {
 
     async loadAddressList() {
         try {
+            // Increment request token to invalidate any in-flight requests
+            const requestToken = ++this.addressListRequestToken;
+
             const params = new URLSearchParams({
                 page: this.addressList.currentPage,
                 per_page: this.addressList.perPage,
@@ -2180,6 +2184,12 @@ class GeocoderApp {
             }
 
             const result = await this.apiCall(`/api/addresses?${params}`);
+
+            // Check if this request is still the most recent one
+            if (requestToken !== this.addressListRequestToken) {
+                // A newer request has been initiated, discard these results
+                return;
+            }
 
             this.addressList.totalPages = result.pages;
             this.addressList.total = result.total;
@@ -2212,9 +2222,20 @@ class GeocoderApp {
             const isCurrent = this.currentAddress && this.currentAddress.id === address.id;
             const statusClass = `status-${address.status}`;
 
-            // Show multi-map indicator if address exists on multiple maps
-            const mapCount = address.map_count || 0;
-            const multiMapBadge = mapCount > 1 ? `<span class="multi-map-badge" title="Geocoded on ${mapCount} maps">• ${mapCount} maps</span>` : '';
+            // Show multi-map indicator
+            let multiMapBadge = '';
+            if (this.currentHistoricalMap) {
+                // Map-specific view: show names of OTHER maps where address is geocoded
+                if (address.other_map_names) {
+                    multiMapBadge = `<span class="other-maps-badge" title="Also geocoded on: ${this.escapeHtml(address.other_map_names)}">• ${this.escapeHtml(address.other_map_names)}</span>`;
+                }
+            } else {
+                // Deduplicated view: show count of maps
+                const mapCount = address.map_count || 0;
+                if (mapCount > 1) {
+                    multiMapBadge = `<span class="multi-map-badge" title="Geocoded on ${mapCount} maps">• ${mapCount} maps</span>`;
+                }
+            }
 
             return `
                 <tr class="${isCurrent ? 'current-address' : ''}" data-id="${address.id}">

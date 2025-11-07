@@ -599,8 +599,8 @@ class Database:
             filter_status: Filter by status (pending, geocoded, skipped)
             filter_street: Filter by exact street name
             search: Search in street name or house number
-            filter_map: Filter by map_name (exact match)
-            include_null_map: Include addresses with map_name = NULL (when filter_map is set)
+            filter_map: Filter by map_name - shows all addresses with status specific to this map
+            include_null_map: Include addresses with map_name = NULL (deprecated with new map-specific view)
             deduplicate: Show only one entry per (street, number) - most recent
 
         Returns:
@@ -609,6 +609,152 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
 
+        # NEW: Map-specific view mode
+        # When filter_map is set, show ALL addresses with their status on that specific map
+        if filter_map is not None:
+            # Build base query filters for all unique addresses
+            base_where = []
+            base_params = []
+
+            if filter_street:
+                base_where.append('street = ?')
+                base_params.append(filter_street)
+
+            if search:
+                base_where.append('(street LIKE ? OR number LIKE ?)')
+                search_pattern = f'%{search}%'
+                base_params.extend([search_pattern, search_pattern])
+
+            base_where_clause = ' AND '.join(base_where) if base_where else '1=1'
+
+            # Validate sort parameters
+            valid_sort_columns = ['sort_order', 'street', 'number', 'status', 'timestamp', 'id']
+            if sort_by not in valid_sort_columns:
+                sort_by = 'sort_order'
+
+            if sort_order.upper() not in ['ASC', 'DESC']:
+                sort_order = 'ASC'
+            sort_order_upper = sort_order.upper()
+
+            # Build ORDER BY clause
+            if sort_by == 'street':
+                order_clause = (
+                    f"ba.street COLLATE NOCASE {sort_order_upper}, "
+                    f"CAST(ba.number AS INTEGER) {sort_order_upper}, "
+                    f"ba.number COLLATE NOCASE {sort_order_upper}"
+                )
+            elif sort_by == 'number':
+                order_clause = (
+                    f"CAST(ba.number AS INTEGER) {sort_order_upper}, "
+                    f"ba.number COLLATE NOCASE {sort_order_upper}"
+                )
+            else:
+                order_clause = f"{sort_by} {sort_order_upper}"
+
+            # Build main query: get all unique addresses with map-specific status
+            query = f'''
+                WITH base_addresses AS (
+                    SELECT DISTINCT street, number, MIN(sort_order) as min_sort_order, MIN(id) as any_id
+                    FROM addresses
+                    WHERE {base_where_clause}
+                    GROUP BY street, number
+                ),
+                map_specific AS (
+                    SELECT street, number, id, lat, lon, x_coord, y_coord, status, sort_order, timestamp
+                    FROM addresses
+                    WHERE map_name = ?
+                ),
+                other_maps AS (
+                    SELECT street, number,
+                           GROUP_CONCAT(DISTINCT map_name) as other_map_names
+                    FROM addresses
+                    WHERE map_name IS NOT NULL
+                      AND map_name != ?
+                      AND status = 'geocoded'
+                    GROUP BY street, number
+                )
+                SELECT
+                    COALESCE(ms.id, ba.any_id) as id,
+                    ba.street,
+                    ba.number,
+                    ms.x_coord,
+                    ms.y_coord,
+                    ms.lat,
+                    ms.lon,
+                    COALESCE(ms.status, 'pending') as status,
+                    COALESCE(ms.sort_order, ba.min_sort_order) as sort_order,
+                    ms.timestamp,
+                    ? as map_name,
+                    (SELECT COUNT(DISTINCT map_name) FROM addresses a2
+                     WHERE a2.street = ba.street AND a2.number = ba.number
+                     AND a2.map_name IS NOT NULL) as map_count,
+                    om.other_map_names
+                FROM base_addresses ba
+                LEFT JOIN map_specific ms ON ba.street = ms.street AND ba.number = ms.number
+                LEFT JOIN other_maps om ON ba.street = om.street AND ba.number = om.number
+            '''
+
+            # Add status filter if needed
+            where_clauses = []
+            query_params = base_params + [filter_map, filter_map, filter_map]
+
+            if filter_status:
+                where_clauses.append('COALESCE(ms.status, "pending") = ?')
+                query_params.append(filter_status)
+
+            if where_clauses:
+                query += ' WHERE ' + ' AND '.join(where_clauses)
+
+            query += f' ORDER BY {order_clause}'
+
+            # Get total count for pagination
+            count_query = f'''
+                SELECT COUNT(*) FROM (
+                    SELECT DISTINCT ba.street, ba.number
+                    FROM (
+                        SELECT DISTINCT street, number
+                        FROM addresses
+                        WHERE {base_where_clause}
+                    ) ba
+                    LEFT JOIN addresses ms ON ba.street = ms.street
+                        AND ba.number = ms.number
+                        AND ms.map_name = ?
+            '''
+
+            count_params = base_params + [filter_map]
+
+            if filter_status:
+                count_query += ' WHERE COALESCE(ms.status, "pending") = ?'
+                count_params.append(filter_status)
+
+            count_query += ')'
+
+            cursor.execute(count_query, count_params)
+            total = cursor.fetchone()[0]
+
+            # Calculate pagination
+            total_pages = (total + per_page - 1) // per_page if per_page > 0 else 1
+            page = max(1, min(page, total_pages if total_pages > 0 else 1))
+            offset = (page - 1) * per_page
+
+            # Add pagination
+            if per_page > 0:
+                query += ' LIMIT ? OFFSET ?'
+                query_params.extend([per_page, offset])
+
+            cursor.execute(query, query_params)
+            addresses = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+
+            return {
+                'addresses': addresses,
+                'total': total,
+                'pages': total_pages,
+                'current_page': page,
+                'per_page': per_page
+            }
+
+        # ORIGINAL CODE: existing behavior for when filter_map is None
         # Build WHERE clause
         where_clauses = []
         params = []
@@ -625,15 +771,6 @@ class Database:
             where_clauses.append('(street LIKE ? OR number LIKE ?)')
             search_pattern = f'%{search}%'
             params.extend([search_pattern, search_pattern])
-
-        # Map filtering
-        if filter_map is not None:
-            if include_null_map:
-                where_clauses.append('(map_name = ? OR map_name IS NULL)')
-                params.append(filter_map)
-            else:
-                where_clauses.append('map_name = ?')
-                params.append(filter_map)
 
         where_clause = ' AND '.join(where_clauses) if where_clauses else '1=1'
 

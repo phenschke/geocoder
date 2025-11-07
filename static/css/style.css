@@ -710,6 +710,18 @@ body.resizing-sidebar * {
     opacity: 1;
 }
 
+.other-maps-badge {
+    margin-left: 6px;
+    font-size: 9px;
+    color: #0d6efd;
+    opacity: 0.8;
+    font-weight: 500;
+}
+
+.other-maps-badge:hover {
+    opacity: 1;
+}
+
 /* Pagination */
 .pagination-container {
     display: flex;
