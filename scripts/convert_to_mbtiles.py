@@ -10,12 +10,13 @@ Usage:
 import sys
 import sqlite3
 import time
+import gc
 from pathlib import Path
 from mbutil import disk_to_mbtiles
 
 # Configuration
-MAPS_DIR = Path(__file__).parent / "static" / "maps"
-OUTPUT_DIR = Path(__file__).parent / "static" / "mbtiles"
+MAPS_DIR = Path(__file__).parent.parent / "static" / "maps"
+OUTPUT_DIR = MAPS_DIR  # Output MBTiles files directly in maps directory
 
 
 def get_tile_bounds(tiles_dir):
@@ -62,12 +63,44 @@ def get_tile_bounds(tiles_dir):
     }
 
 
-def add_metadata(mbtiles_path, map_name, tiles_dir):
-    """Add metadata to MBTiles file."""
-    bounds_info = get_tile_bounds(tiles_dir)
+def flip_y_coordinates(mbtiles_path, max_retries=5):
+    """Convert tile_row from XYZ to TMS coordinate scheme.
 
-    conn = sqlite3.connect(mbtiles_path)
-    cursor = conn.cursor()
+    gdal2tiles --xyz creates XYZ-named tiles, but Leaflet with tms:true
+    expects TMS coordinates. This flips Y: tms_y = (2^zoom - 1) - xyz_y
+    """
+    for attempt in range(max_retries):
+        try:
+            conn = sqlite3.connect(mbtiles_path, timeout=60.0)
+            cursor = conn.cursor()
+
+            # Get all zoom levels
+            cursor.execute('SELECT DISTINCT zoom_level FROM tiles')
+            zoom_levels = [row[0] for row in cursor.fetchall()]
+
+            for zoom in zoom_levels:
+                max_y = (2 ** zoom) - 1
+                cursor.execute(
+                    'UPDATE tiles SET tile_row = ? - tile_row WHERE zoom_level = ?',
+                    (max_y, zoom)
+                )
+
+            conn.commit()
+            conn.close()
+            return
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e) and attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 2
+                print(f"   Database locked during Y-flip, retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                gc.collect()
+            else:
+                raise
+
+
+def add_metadata(mbtiles_path, map_name, tiles_dir, max_retries=5):
+    """Add metadata to MBTiles file with retry logic for locked database."""
+    bounds_info = get_tile_bounds(tiles_dir)
 
     metadata = {
         'name': map_name,
@@ -82,14 +115,28 @@ def add_metadata(mbtiles_path, map_name, tiles_dir):
     if bounds_info['bounds']:
         metadata['bounds'] = bounds_info['bounds']
 
-    for key, value in metadata.items():
-        cursor.execute(
-            'INSERT OR REPLACE INTO metadata (name, value) VALUES (?, ?)',
-            (key, value)
-        )
+    for attempt in range(max_retries):
+        try:
+            conn = sqlite3.connect(mbtiles_path, timeout=60.0, isolation_level='DEFERRED')
+            cursor = conn.cursor()
 
-    conn.commit()
-    conn.close()
+            for key, value in metadata.items():
+                cursor.execute(
+                    'INSERT OR REPLACE INTO metadata (name, value) VALUES (?, ?)',
+                    (key, value)
+                )
+
+            conn.commit()
+            conn.close()
+            return  # Success
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e) and attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 2  # 2, 4, 6, 8 seconds
+                print(f"   Database locked, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait_time)
+                gc.collect()  # Force garbage collection to release any lingering connections
+            else:
+                raise
 
 
 def convert_map(map_name):
@@ -126,7 +173,15 @@ def convert_map(map_name):
         # mbutil expects string paths
         disk_to_mbtiles(str(tiles_dir), str(mbtiles_path), format='png', scheme='tms')
 
-        # Add metadata
+        # Force garbage collection to release mbutil's database connection
+        gc.collect()
+        time.sleep(1)
+
+        # Flip Y coordinates from XYZ to TMS (gdal2tiles --xyz creates XYZ tiles)
+        print("   Flipping Y coordinates to TMS scheme...")
+        flip_y_coordinates(str(mbtiles_path))
+
+        # Add metadata (with retry logic for locked database)
         add_metadata(str(mbtiles_path), map_name, tiles_dir)
 
         elapsed = time.time() - start_time

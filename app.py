@@ -482,7 +482,7 @@ def serve_tile(map_name, z, x, y):
         conn = sqlite3.connect(str(mbtiles_path))
         cursor = conn.cursor()
 
-        # MBTiles uses TMS tiling scheme, query directly with y coordinate
+        # Query tiles directly (both disk and database use same coordinate scheme)
         cursor.execute(
             'SELECT tile_data FROM tiles WHERE zoom_level = ? AND tile_column = ? AND tile_row = ?',
             (z, x, y)

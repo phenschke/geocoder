@@ -69,16 +69,29 @@ cp your_historical_map.png static/maps/
 # macOS: brew install gdal
 # Windows: Download from https://gdal.org/download.html
 
-# Create a subdirectory for your map
-mkdir -p static/maps/YourMapName_Georef
+# Place your georeferenced TIFF in static/maps/
+cp your_map.tif static/maps/YourMapName.tif
 
-# Move your georeferenced TIFF into it
-mv your_map.tif static/maps/YourMapName_Georef/
+# OPTIONAL BUT RECOMMENDED: Add internal overviews for 50-70% faster tiling
+gdaladdo -r average static/maps/YourMapName.tif 2 4 8 16 32 64 128
 
-# Generate tiles (this may take several minutes for large maps)
+# Create tile directory
+mkdir -p static/maps/YourMapName_Georef/tiles
+
+# Generate tiles (adjust --processes to match your CPU cores)
+# IMPORTANT: Use --xyz flag for correct coordinate scheme
 gdal2tiles.py -z 13-20 \
-  static/maps/YourMapName_Georef/your_map.tif \
+  --processes=4 \
+  --xyz \
+  --resampling=average \
+  static/maps/YourMapName.tif \
   static/maps/YourMapName_Georef/tiles/
+
+# Convert tiles to MBTiles format (single file, more efficient)
+uv run python scripts/convert_to_mbtiles.py YourMapName_Georef
+
+# OPTIONAL: Clean up tile directory to save disk space
+rm -rf static/maps/YourMapName_Georef/tiles/
 ```
 
 **Performance comparison:**
