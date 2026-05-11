@@ -49,7 +49,7 @@ def get_tile_bounds(tiles_dir):
                 max_x = max(max_x, x)
 
                 for y_file in x_dir.iterdir():
-                    if y_file.suffix == '.png':
+                    if y_file.suffix.lower() in ('.png', '.jpg', '.jpeg', '.webp'):
                         y = int(y_file.stem)
                         min_y = min(min_y, y)
                         max_y = max(max_y, y)
@@ -98,7 +98,7 @@ def flip_y_coordinates(mbtiles_path, max_retries=5):
                 raise
 
 
-def add_metadata(mbtiles_path, map_name, tiles_dir, max_retries=5):
+def add_metadata(mbtiles_path, map_name, tiles_dir, fmt='png', max_retries=5):
     """Add metadata to MBTiles file with retry logic for locked database."""
     bounds_info = get_tile_bounds(tiles_dir)
 
@@ -107,7 +107,7 @@ def add_metadata(mbtiles_path, map_name, tiles_dir, max_retries=5):
         'type': 'baselayer',
         'version': '1.0.0',
         'description': f'Historical map tiles for {map_name}',
-        'format': 'png',
+        'format': fmt,
         'minzoom': str(bounds_info['minzoom']),
         'maxzoom': str(bounds_info['maxzoom']),
     }
@@ -147,13 +147,19 @@ def convert_map(map_name):
         print(f"❌ Tiles directory not found: {tiles_dir}")
         return False
 
-    # Count tiles
-    tile_count = sum(1 for _ in tiles_dir.rglob("*.png"))
-    if tile_count == 0:
+    # Detect tile format from first tile we find (png / jpg / webp)
+    EXT_TO_FMT = {'.png': 'png', '.jpg': 'jpg', '.jpeg': 'jpg', '.webp': 'webp'}
+    first_tile = next(
+        (p for p in tiles_dir.rglob('*') if p.is_file() and p.suffix.lower() in EXT_TO_FMT),
+        None,
+    )
+    if first_tile is None:
         print(f"❌ No tiles found in {tiles_dir}")
         return False
+    fmt = EXT_TO_FMT[first_tile.suffix.lower()]
+    tile_count = sum(1 for _ in tiles_dir.rglob(f'*{first_tile.suffix}'))
 
-    print(f"📊 Converting {map_name}: {tile_count:,} tiles")
+    print(f"📊 Converting {map_name}: {tile_count:,} {fmt} tiles")
 
     # Create output directory
     OUTPUT_DIR.mkdir(exist_ok=True)
@@ -171,7 +177,7 @@ def convert_map(map_name):
 
     try:
         # mbutil expects string paths
-        disk_to_mbtiles(str(tiles_dir), str(mbtiles_path), format='png', scheme='tms')
+        disk_to_mbtiles(str(tiles_dir), str(mbtiles_path), format=fmt, scheme='tms')
 
         # Force garbage collection to release mbutil's database connection
         gc.collect()
@@ -182,7 +188,7 @@ def convert_map(map_name):
         flip_y_coordinates(str(mbtiles_path))
 
         # Add metadata (with retry logic for locked database)
-        add_metadata(str(mbtiles_path), map_name, tiles_dir)
+        add_metadata(str(mbtiles_path), map_name, tiles_dir, fmt=fmt)
 
         elapsed = time.time() - start_time
         file_size = mbtiles_path.stat().st_size / (1024 * 1024)  # MB
